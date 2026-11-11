@@ -1,0 +1,350 @@
+name: Build TikAuto APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Generate project files
+        run: |
+          mkdir -p proj/app/src/main/java/com/example/tikauto proj/app/src/main/res/xml proj/app/src/main/res/values
+          cd proj
+          cat > settings.gradle.kts <<'TIKEOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "TikAuto"
+          include(":app")
+          TIKEOF
+          cat > build.gradle.kts <<'TIKEOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          TIKEOF
+          cat > gradle.properties <<'TIKEOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          TIKEOF
+          cat > app/build.gradle.kts <<'TIKEOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.example.tikauto"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.tikauto"
+                  minSdk = 28
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+          }
+          TIKEOF
+          cat > app/src/main/AndroidManifest.xml <<'TIKEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="TikAuto"
+                  android:theme="@android:style/Theme.Material.Light">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".AutoService"
+                      android:exported="false"
+                      android:label="TikAuto"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
+                  </service>
+              </application>
+          </manifest>
+          TIKEOF
+          cat > app/src/main/res/values/strings.xml <<'TIKEOF'
+          <resources>
+              <string name="service_desc">Автоматизирует лайк, комментарий, скриншот и копирование ссылки в TikTok.</string>
+          </resources>
+          TIKEOF
+          cat > app/src/main/res/xml/accessibility_service_config.xml <<'TIKEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canPerformGestures="true"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="100"
+              android:packageNames="com.zhiliaoapp.musically,com.ss.android.ugc.trill"
+              android:description="@string/service_desc" />
+          TIKEOF
+          cat > app/src/main/java/com/example/tikauto/AutoService.kt <<'TIKEOF'
+          package com.example.tikauto
+          
+          import android.accessibilityservice.AccessibilityService
+          import android.accessibilityservice.GestureDescription
+          import android.graphics.Path
+          import android.os.Bundle
+          import android.util.Log
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.widget.Toast
+          import kotlinx.coroutines.*
+          import kotlin.random.Random
+          
+          class AutoService : AccessibilityService() {
+          
+              companion object {
+                  @Volatile var instance: AutoService? = null
+                  const val TAG = "TikAuto"
+              }
+          
+              private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+              private var job: Job? = null
+          
+              override fun onServiceConnected() { instance = this }
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+              override fun onDestroy() {
+                  instance = null
+                  job?.cancel()
+                  super.onDestroy()
+              }
+          
+              // ---------- Основной сценарий ----------
+          
+              fun start(comments: List<String>, repeats: Int, initialDelayMs: Long = 6000) {
+                  job?.cancel()
+                  job = scope.launch {
+                      toast("Старт через ${initialDelayMs / 1000} c")
+                      delay(initialDelayMs)
+                      for (i in 1..repeats) {
+                          Log.d(TAG, "=== Видео $i из $repeats ===")
+                          like();                          pause()
+                          comment(comments.random());      pause()
+                          screenshot();                    pause()
+                          copyLink();                      pause()
+                          if (i < repeats) { swipeUp();    pause(2500, 4500) }
+                      }
+                      toast("Готово")
+                  }
+              }
+          
+              fun stop() {
+                  job?.cancel()
+                  toast("Остановлено")
+              }
+          
+              // ---------- Шаги ----------
+          
+              private suspend fun like() {
+                  val w = resources.displayMetrics.widthPixels
+                  val h = resources.displayMetrics.heightPixels
+                  doubleTap(w * 0.5f, h * 0.4f)   // двойной тап по видео = лайк
+              }
+          
+              private suspend fun comment(text: String) {
+                  val btn = find { it.matches("comment", "комментар") }
+                  if (btn == null) { Log.w(TAG, "Кнопка комментариев не найдена"); return }
+                  click(btn); delay(1800)
+          
+                  val input = find { it.className?.toString() == "android.widget.EditText" }
+                  if (input == null) { Log.w(TAG, "Поле ввода не найдено"); back(); return }
+                  input.performAction(AccessibilityNodeInfo.ACTION_CLICK); delay(400)
+                  val args = Bundle().apply {
+                      putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                  }
+                  input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args); delay(800)
+          
+                  val send = find { it.matches("post", "send", "отправ", "опублик") }
+                  if (send != null) click(send) else Log.w(TAG, "Кнопка отправки не найдена")
+                  delay(1500)
+          
+                  back(); delay(500)   // закрыть клавиатуру или окно
+                  if (find { it.className?.toString() == "android.widget.EditText" } != null) back()  // если окно ещё открыто
+                  delay(500)
+              }
+          
+              private suspend fun screenshot() {
+                  performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+                  delay(1200)
+              }
+          
+              private suspend fun copyLink() {
+                  val share = find { it.matches("share", "поделиться") }
+                  if (share == null) { Log.w(TAG, "Кнопка «Поделиться» не найдена"); return }
+                  click(share); delay(1500)
+          
+                  val copy = find { it.matches("copy link", "копировать ссылку", "скопировать ссылку") }
+                  if (copy != null) click(copy) else { Log.w(TAG, "«Копировать ссылку» не найдено"); back() }
+                  delay(800)
+              }
+          
+              private suspend fun swipeUp() {
+                  val w = resources.displayMetrics.widthPixels
+                  val h = resources.displayMetrics.heightPixels
+                  val p = Path().apply { moveTo(w * 0.5f, h * 0.75f); lineTo(w * 0.5f, h * 0.25f) }
+                  gesture(GestureDescription.Builder().addStroke(stroke(p, 0, 300)).build(), 300)
+              }
+          
+              // ---------- Утилиты ----------
+          
+              private suspend fun pause(min: Long = 1500, max: Long = 3500) = delay(Random.nextLong(min, max))
+          
+              private fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
+          
+              private fun stroke(p: Path, start: Long, dur: Long) =
+                  GestureDescription.StrokeDescription(p, start, dur)
+          
+              private suspend fun gesture(g: GestureDescription, ms: Long) {
+                  dispatchGesture(g, null, null)
+                  delay(ms + 150)
+              }
+          
+              private suspend fun doubleTap(x: Float, y: Float) {
+                  val p1 = Path().apply { moveTo(x, y) }
+                  val p2 = Path().apply { moveTo(x, y) }
+                  val g = GestureDescription.Builder()
+                      .addStroke(stroke(p1, 0, 40))
+                      .addStroke(stroke(p2, 120, 40))
+                      .build()
+                  gesture(g, 200)
+              }
+          
+              private fun AccessibilityNodeInfo.matches(vararg keys: String): Boolean {
+                  val s = "${text ?: ""} ${contentDescription ?: ""}".lowercase()
+                  return keys.any { s.contains(it) }
+              }
+          
+              private fun find(pred: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
+                  val root = rootInActiveWindow ?: return null
+                  val queue = ArrayDeque<AccessibilityNodeInfo>()
+                  queue.add(root)
+                  while (queue.isNotEmpty()) {
+                      val n = queue.removeFirst()
+                      if (pred(n)) return n
+                      for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
+                  }
+                  return null
+              }
+          
+              private fun click(node: AccessibilityNodeInfo): Boolean {
+                  var c: AccessibilityNodeInfo? = node
+                  while (c != null) {
+                      if (c.isClickable) return c.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                      c = c.parent
+                  }
+                  return false
+              }
+          
+              private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+          
+              /** Выводит в logcat все элементы экрана: помогает подобрать названия кнопок. */
+              fun dumpTree() {
+                  val root = rootInActiveWindow ?: return
+                  fun walk(n: AccessibilityNodeInfo, depth: Int) {
+                      Log.d(TAG, "${"  ".repeat(depth)}${n.className} text=${n.text} desc=${n.contentDescription} click=${n.isClickable}")
+                      for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, depth + 1) }
+                  }
+                  walk(root, 0)
+                  toast("Дамп в logcat (тег TikAuto)")
+              }
+          }
+          TIKEOF
+          cat > app/src/main/java/com/example/tikauto/MainActivity.kt <<'TIKEOF'
+          package com.example.tikauto
+          
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.text.InputType
+          import android.widget.*
+          
+          class MainActivity : Activity() {
+          
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val pad = (16 * resources.displayMetrics.density).toInt()
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(pad, pad, pad, pad)
+                  }
+          
+                  val comments = EditText(this).apply {
+                      setText("Круто!\nОгонь\nСупер видео")
+                      hint = "Комментарии, по одному на строку"
+                      minLines = 3
+                  }
+                  val repeats = EditText(this).apply {
+                      setText("5")
+                      hint = "Сколько видео"
+                      inputType = InputType.TYPE_CLASS_NUMBER
+                  }
+          
+                  fun btn(t: String, f: () -> Unit) = Button(this).apply {
+                      text = t
+                      setOnClickListener { f() }
+                  }
+          
+                  root.addView(TextView(this).apply { text = "Комментарии (случайный из списка):" })
+                  root.addView(comments)
+                  root.addView(repeats)
+          
+                  root.addView(btn("1. Включить сервис в спец. возможностях") {
+                      startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                  })
+                  root.addView(btn("2. Старт (откроется TikTok)") {
+                      val svc = AutoService.instance
+                      if (svc == null) {
+                          toast("Сначала включи сервис TikAuto")
+                      } else {
+                          val list = comments.text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                              .ifEmpty { listOf("Круто!") }
+                          val n = repeats.text.toString().toIntOrNull() ?: 5
+                          val pm = packageManager
+                          val launch = pm.getLaunchIntentForPackage("com.zhiliaoapp.musically")
+                              ?: pm.getLaunchIntentForPackage("com.ss.android.ugc.trill")
+                          if (launch != null) startActivity(launch) else toast("TikTok не найден")
+                          svc.start(list, n)
+                      }
+                  })
+                  root.addView(btn("Стоп") { AutoService.instance?.stop() })
+                  root.addView(btn("Дамп экрана в logcat (для отладки)") { AutoService.instance?.dumpTree() })
+          
+                  setContentView(ScrollView(this).apply { addView(root) })
+              }
+          
+              private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+          }
+          TIKEOF
+      - name: Build APK
+        working-directory: proj
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TikAuto-apk
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
